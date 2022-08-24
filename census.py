@@ -178,6 +178,7 @@ def rmt_file_exists(nodestr, remotepath):
 	return int(local_cmd(f'ssh {nodestr} test -f {remotepath};echo $?',True).pop(0)) == 0
 
 def rmt_dir_exists(nodestr, remotepath):
+	c = f'test -d {remotepath};echo $?'
 	return int(rmt_cmd(nodestr, c).pop(0)) == 0
 
 # TODO: This is prone to error, take a look at refactoring

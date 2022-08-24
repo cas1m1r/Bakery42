@@ -1,22 +1,33 @@
+from colorama import init, Fore
 import census as distributed
 import bakeryutils as utils
 import multiprocessing
 from analysis import *
+import os
 
 
+fB = Fore.LIGHTBLUE_EX
+fR = Fore.RED
+fW = Fore.WHITE
+fM = Fore.MAGENTA
+fC = Fore.CYAN
+fG = Fore.GREEN
+fY = Fore.YELLOW
+fE = fW
+OFF = ''
 
 class Master:
-	def __init__(self, node_program_config):
+	def __init__(self, config={}):
 		self.peers = self.load_nodes()
 		self.alive = self.whos_there()
-		if node_program_config == {}:
-			node_program_config = self.generate_test_task()
-		# Now read the program_config to determine what each node should be doing
-		self.queue = self.determine_node_assignments(node_program_config)
-		# Probably shoudl do some verification of paths present, files/libs needed to run the tasks
-		self.tasks_confirmed = self.verify_assignments()
+		if config == {}:
+			self.queue = []
+			self.tasks_confirmed = {}
+		else:
+			self.queue = self.determine_node_assignments(config)
+			self.tasks_confirmed = self.verify_assignments()	
 		# Run all tasks on each node
-		self.run_tasks(self.tasks_confirmed, self.queue)
+		self.run_tasks()
 
 	def load_nodes(self):
 		return distributed.load_nodes(os.getcwd())
@@ -38,8 +49,9 @@ class Master:
 		for node_name in config.keys():
 			# Get target program name to run on remote node 
 			if 'jobs' in config[node_name].keys():
-				target_program = config[node_name]['jobs'].pop(0)
-				target_args = config[node_name]['args'].pop(0)
+				target_program = config[node_name]['jobs']
+				target_args = config[node_name]['args'][0]
+				print(f'{target_program} {target_args}')
 			else:
 				print(config[node_name])
 				print(f'{fB}{fR}[X]{fE}{fB} No job present for {fR}{node_name}{fE}. Moving on...')
@@ -47,10 +59,10 @@ class Master:
 			# check if node is online
 			if self.alive[node_name]:
 				# insert assignment from the configration for this node 
-				assignments[node_name]= {'jobs': [target_program, target_args]}
+				assignments[node_name]= [config[node_name]['jobs'], target_args] 
 			else:
 				print(f'{fB}{fR}[X] {fE}{fB}Cannot run {target_program} on {node_name} because {node_name} is offline')
-		return assignments
+		return config
 
 	def verify_assignments(self):
 		"""
@@ -70,19 +82,27 @@ class Master:
 		for peer in self.queue.keys():
 			if 'jobs' in self.queue[peer].keys():
 				verified[peer] = [False, '']
-				target_program = self.queue[peer]['jobs'][0]
+				# Parse the input program and args for different kinds of input 
+				target_program = self.queue[peer]['jobs'][0].split(' ')[-1]
+				args = self.queue[peer]['jobs'][-1]
+
+				if 'fileout' not in self.queue[peer].keys():
+					self.queue[peer]['fileout'] = ''
+				
 				# Determine if the target program is on this local machine (master) or on the remote node
 				isLocal = False
 				isRemote = False
+				nodestr = self.peers[peer]
 				if not os.path.isfile(target_program):
 					print(f'{fY}[?] {fW}Job {fR}{target_program}{fW} is not locally present, checking {peer}')
 				else:
 					isLocal = True
+					distributed.put_rmt_file(nodestr, target_program, f"{bakery_location(nodestr).split('@')[0]}/")
 					verified[peer] = [True, 'local']
 					continue
 				# Make sure node has target job
-				rpath  = os.path.join(bakery_location(self.peers[peer]), target_program.split(' ')[-1])
-				if distributed.rmt_file_exists(self.peers[peer], rpath):
+				rpath  = os.path.join(bakery_location(nodestr), target_program.split(' ')[-1])
+				if distributed.rmt_file_exists(nodestr, rpath):
 					print(f'[+] {fG}{peer}{fW} has {fB}{target_program}{fW} to run')
 					isRemote = True
 					verified[peer] = [True, 'remote']
@@ -93,6 +113,22 @@ class Master:
 		print(f'Jobs Verified:\n\033[2m{verified}\033[0m')
 		return verified
 
+
+	def job_parser(self, peer):
+		execution_strings = []
+		n_jobs = len(self.queue[peer]['jobs'])
+		print(f'[+] {peer} has {n_jobs} jobs to parse...')
+		for jobid in range(n_jobs):
+			program = self.queue[peer][jobid]
+			args = self.queue[peer][jobid]
+			if len(program.split(' ')) > 1:
+				# A first binary operates on a second: python3 /home/node/Bakery42/test.py 
+				command = f'{bakery_location(self.peers[peer])}/{program}'
+			else:
+				# Its an executable itself like ./home/node/Bakery42/compiledCode
+				command = f'{bakery_location(self.peers[peer])}/{program}'
+			execution_strings.append(command)
+		return execution_strings
 
 	def generate_test_task(self):
 		# Now Create test.py for them 
@@ -118,31 +154,67 @@ class Master:
 						print(f'{fY}[?] Test File May have failed to transfer\033[0m')
 		return jobs
 
+	def test_network(self):
+		node_program_config = self.generate_test_task()
+		# Now read the program_config to determine what each node should be doing
+		self.queue = self.determine_node_assignments(node_program_config)
+		# Probably shoudl do some verification of paths present, files/libs needed to run the tasks
+		self.tasks_confirmed = self.verify_assignments()
+		self.run_tasks()
 
-	def run_tasks(self, confirmed, jobs):
-		print(f'{fG}[~] {fW}Running jobs...')
-		print(f'\033[2m{jobs}\033[0m')
-		
-		threads = multiprocessing.Pool(len(self.peers.keys()))
+	def whos_running(self, program):
+		workers = {}
 		for peer, nodestr in self.peers.items():
-			program = f'{self.queue[peer]["jobs"][0].split(" ")[0]} {bakery_location(nodestr)}/{self.queue[peer]["jobs"][0].split(" ")[-1]}'
-			job = threads.apply_async(distributed.rmt_cmd, (nodestr, program))
-			job.get(2)
+			if distributed.is_running(nodestr, 'watcher.py'):
+				watchers[peer] = True 
+			else:
+				watchers[peer] = False
+		return workers
+
+	def run_tasks(self, estimated_completion_time=1):
+		print(f'{fG}[~] {fW}Running jobs...')
+		print(f'\033[2m{self.queue}\033[0m')
+		confirmed = self.tasks_confirmed
+		jobs = self.queue
+		threads = multiprocessing.Pool(len(self.peers.keys()))
+		for peer, hasJob in self.tasks_confirmed.items():
+			if hasJob:
+				nodestr = self.peers[peer]
+				program = f'{self.queue[peer]["jobs"][0].split(" ")[0]} {bakery_location(nodestr)}/{self.queue[peer]["jobs"][0].split(" ")[-1]} '
+				if len(self.queue[peer]['args'])>=1:
+					program += f"{bakery_location(nodestr)}/{' '.join(self.queue[peer]['args'])}"
+				
+				print(f'{fB} Executing:\n{fW}{program}')
+				job = threads.apply_async(distributed.rmt_cmd, (nodestr, program))
+				job.get(estimated_completion_time)
+				self.queue[peer]["jobs"].pop(0) # clear the que because the job ran
 		print('Waiting for machines to work...')
-		
 		# Now look for result.txt
 		# TODO: should continue to look while they work
-		for peer,nodestr in self.peers.items():
-			if distributed.rmt_file_exists(nodestr, f'/home/{nodestr.split("@")[0]}/result.txt'):
-				print(f'{fR}[>] {fW}{peer}{fG}  sucessfully completed {fG} test program, getting results')
-				job2 = threads.apply_async(get_test_results, (peer, nodestr))
-				job2.get(3)
-				
+		for peer, hasJob in self.tasks_confirmed.items():
+			if hasJob:
+				waiting_for_results = False 
+				while not waiting_for_results:
+					# check if fileout exists
+					if len(self.queue[peer]["fileout"]):
+						fout = f'/home/{self.peers[peer].split("@")[0]}/{self.queue[peer]["fileout"][0]}'
+						localf = self.queue[peer]["fileout"][0]
+					else:
+						localf = 'result.txt'
+						fout = f'/home/{self.peers[peer].split("@")[0]}/result.txt'
+					print(f'[?] Waiting for output file {fout}')
+					# check if the output file is there
+					waiting_for_results = distributed.rmt_file_exists(self.peers[peer], fout)
 
-def get_test_results(peer, nodestr):
+					#
+				distributed.get_rmt_file(self.peers[peer], os.getcwd(), fout)
+				print('RESULT:\n')
+				print(open(localf,'r').read()) 
+
+def get_test_results(peer, nodestr, fileout='result.txt'):
 	if not os.path.isdir(peer.upper()):
 		os.mkdir(peer.upper())
-	rpath = f'/home/{nodestr.split("@")[0]}/result.txt'
+	rpath = f'/home/{nodestr.split("@")[0]}/{fileout}'
 	distributed.get_rmt_file(nodestr, os.path.join(os.getcwd(), peer.upper()),rpath)
 	os.system(f'mv result.txt {peer.upper()}')
 	print(open(f'{peer.upper()}/result.txt','r').read())
