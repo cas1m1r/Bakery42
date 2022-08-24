@@ -49,12 +49,12 @@ RESULT:
 Test file /home/pi/Bakery42/test.py was run on 8/24/2022 at 1:33:49
 ```
 
-So now lets try something more customized. Lets say I want to parse a json log (present on master machine, note on remote node) using a python file called `log2json.py` also only present on master node. 
+So now lets try something more customized. Lets say I want to parse a json log (present on master machine, not on remote node) using a python file called `log2json.py` also only present on master node. 
 Using a simple JSON config, you can create a master, verify and then run the job:
 
 ```
 >>> from workforce import *
->>> task = {'NODE1':{'jobs':['python3 og2json.py'],'args':['squatters.txt'],'fileout':['result.json']}}
+>>> task = {'NODE1':{'jobs':['python3 log2json.py'],'args':['squatters.txt'],'fileout':['result.json']}}
 >>> master.queue = master.determine_node_assignments(task)
 >>> master.tasks_confirmed = master.verify_assignments()
 [-] Verifying Jobs:
