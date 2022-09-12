@@ -51,7 +51,7 @@ def distribute_hostnames(controller:Master, hosts:dict):
 				localf = f'assignment_{peer}.json'
 				for i in range(int(splits[n-1]),int(splits[n])):
 					assignment[hostnames[i]] = hosts[hostnames[i]]
-				assignments[node] = assignment
+			assignments[node] = assignment
 		n += 1
 	return assignments
 
@@ -91,7 +91,7 @@ def distributed_viewers(logfile):
 			print(f'[+] Giving {node} {int(splits[n])-int(splits[n-1])} hosts')
 			distributed.put_rmt_file(controller.peers[node], localf,f'/home/{nodestr.split("@")[0]}/Bakery42')
 			distributed.put_rmt_file(controller.peers[node], 'visitor.py',f'/home/{nodestr.split("@")[0]}/Bakery42')
-		assignments[node] = assignment
+			assignments[node] = assignment
 		n += 1
 	return assignments
 
@@ -131,6 +131,38 @@ def check_work(nx:Master, jobs:dict, node:Node):
 				pass
 	return finished
 
+def consolidate_log(squatfile,verbose=True):
+	data = {}
+	results = json.loads(open(squatfile,'r').read())
+	for entry in results['entries']:
+		ip = entry['ip_address']
+		domain = entry['site_registered']
+		print(f'{fG}{domain}{fW} is hosted at {fC}{ip}{OFF}')
+		if ip not in list(data.keys()) and len(ip.split('.'))>3:
+			data[ip] = [domain]
+		elif len(ip.split('.'))>3:
+			data[ip].append(domain)
+	return data
+
+
+def combine_logs():
+	if not os.path.isdir(os.path.join(os.getcwd(),'LOGS')):
+		print(f'[!] Missing LOGS folder, nothing to do')
+		exit()
+	domaindata = {}
+	n_domains = 0
+	for filename in os.listdir('LOGS'):
+		logdata = consolidate_log(os.path.join(os.getcwd(),'LOGS',filename))
+		for ip in logdata.keys():
+			if ip not in domaindata.keys():
+				domaindata[ip] = []
+			for domain in logdata[ip]:
+				if domain not in domaindata[ip]:
+					domaindata[ip].append(domain)
+					n_domains += 1
+	print(f'[>]{fY}COMPLETED{OFF}')
+	print(f'[-]{fC}{len(list(domaindata.keys()))}{fW} IPs logged hosting {fR}{n_domains} domains{OFF}')
+	return domaindata
 
 
 def main():
@@ -143,10 +175,20 @@ def main():
 		if log_exists():
 			distributed_viewers(sys.argv[-1])
 
+	if '--combine-logs' in sys.argv:
+		data_out = combine_logs()
+		if os.path.isfile('all_results_by_host.json'):
+			# Warn user this would overwrite existing
+			os.system('mv all_results_by_host.json older_results_by_hosts.json')
+		open('all_results_by_host.json','w').write(json.dumps(combine_logs(),indent=2))
+
+
 	if '--save-work' in sys.argv:
 		if log_exists():
 			hosts = json.loads(open(sys.argv[-1],'r').read())
 			save_work(nx, hosts)
+
+
 
 if __name__ == '__main__':
 	main()

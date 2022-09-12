@@ -297,7 +297,7 @@ def destroy_bakery(peers):
 	threads = multiprocessing.Pool(len(peers.keys()))
 	for peer, nodestr in peers.items():
 		event = threads.apply_async(utils.rmt_cmd, (nodestr, f'rm -rf {bakery_location(nodestr)}'))
-		event.get(1)
+		event.get(120)
 			
 
 def main():
@@ -306,6 +306,10 @@ def main():
 
 	if '--clean' in sys.argv:
 		destroy_bakery(distributed.load_nodes(os.getcwd()))
+
+	if '--build' in sys.argv:
+		enable_all_nodes(distributed.load_nodes(os.getcwd()))
+
 	else:
 		controller = Master({})
 		# controller.test_network()
