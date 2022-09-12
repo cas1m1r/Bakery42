@@ -2,7 +2,11 @@ from colorama import init, Fore
 import census as distributed
 import bakeryutils as utils
 import multiprocessing
-from analysis import *
+from tasks import Task
+from node import Node
+import json
+import time
+import sys
 import os
 
 
@@ -14,35 +18,46 @@ fC = Fore.CYAN
 fG = Fore.GREEN
 fY = Fore.YELLOW
 fE = fW
-OFF = ''
+OFF = '\033[0m'
 
 class Master:
 	def __init__(self, config={}):
+		# Load nodes from configuration
 		self.peers = self.load_nodes()
+		# Check which are active 
 		self.alive = self.whos_there()
+		# Create folders for each node (easier for tracking file transfers while multithreading)
+		self.generate_peer_folders()
+		# Check if a configuration was given
 		if config == {}:
 			self.queue = []
 			self.tasks_confirmed = {}
 		else:
 			self.queue = self.determine_node_assignments(config)
 			self.tasks_confirmed = self.verify_assignments()	
+		# Create Nodes
+		self.nodes = {}
+		self.fileowners = {}
+		for name, label in self.peers.items():
+			self.nodes[name] = Node(label, name)
 		# Run all tasks on each node
-		self.run_tasks()
+		
+		# self.run_tasks()
+
+
+	def generate_peer_folders(self):
+		for peer, nodestr in self.peers.items():
+			# only bothering to make folders for live peers for now
+			if self.alive[peer]:
+				if not os.path.isdir(os.path.join(os.getcwd(),peer)):
+					os.mkdir(os.path.join(os.getcwd(),peer))
+
 
 	def load_nodes(self):
 		return distributed.load_nodes(os.getcwd())
 
 	def whos_there(self):
 		return distributed.test_connections(self.peers)
-
-	def are_peers_running(self, program):
-		are_running = {}
-		for peer, nodestr in self.peers.items():
-			if distributed.is_running(nodestr, program):
-				are_running[peer] = True
-			else:
-				are_running[peer] = False
-		return are_running
 
 	def determine_node_assignments(self, config):
 		assignments = {}
@@ -165,30 +180,41 @@ class Master:
 	def whos_running(self, program):
 		workers = {}
 		for peer, nodestr in self.peers.items():
-			if distributed.is_running(nodestr, 'watcher.py'):
-				watchers[peer] = True 
+			if distributed.is_running(nodestr, program):
+				workers[peer] = True 
 			else:
-				watchers[peer] = False
+				workers[peer] = False
 		return workers
 
+	# TODO: This is too chunky, clean it up!
 	def run_tasks(self, estimated_completion_time=1):
 		print(f'{fG}[~] {fW}Running jobs...')
 		print(f'\033[2m{self.queue}\033[0m')
 		confirmed = self.tasks_confirmed
 		jobs = self.queue
+		# PT 1. Distributed Tasks
+		# Give the nodes the program/files needed to complete the task, and execute it
 		threads = multiprocessing.Pool(len(self.peers.keys()))
 		for peer, hasJob in self.tasks_confirmed.items():
 			if hasJob:
 				nodestr = self.peers[peer]
 				program = f'{self.queue[peer]["jobs"][0].split(" ")[0]} {bakery_location(nodestr)}/{self.queue[peer]["jobs"][0].split(" ")[-1]} '
 				if len(self.queue[peer]['args'])>=1:
-					program += f"{bakery_location(nodestr)}/{' '.join(self.queue[peer]['args'])}"
+					program += f"{' '.join(self.queue[peer]['args'])}"
 				
 				print(f'{fB} Executing:\n{fW}{program}')
 				job = threads.apply_async(distributed.rmt_cmd, (nodestr, program))
-				job.get(estimated_completion_time)
+				try:
+					job.get(estimated_completion_time)
+				except multiprocessing.TimeoutError:
+					print(f'[!] Timeout Waiting for reply from {peer}')
+					pass
 				self.queue[peer]["jobs"].pop(0) # clear the que because the job ran
+		# PT 2. Get the Results 
+		# Not all jobs will take same amount of time, and if running across several machines
+		# simulatneously they will finish at different times too
 		print('Waiting for machines to work...')
+		time.sleep(1)
 		# Now look for result.txt
 		# TODO: should continue to look while they work
 		for peer, hasJob in self.tasks_confirmed.items():
@@ -200,8 +226,8 @@ class Master:
 						fout = f'/home/{self.peers[peer].split("@")[0]}/{self.queue[peer]["fileout"][0]}'
 						localf = self.queue[peer]["fileout"][0]
 					else:
-						localf = 'result.txt'
-						fout = f'/home/{self.peers[peer].split("@")[0]}/result.txt'
+						fout = 'result.txt'
+						localf = fout
 					print(f'[?] Waiting for output file {fout}')
 					# check if the output file is there
 					waiting_for_results = distributed.rmt_file_exists(self.peers[peer], fout)
@@ -209,7 +235,27 @@ class Master:
 					#
 				distributed.get_rmt_file(self.peers[peer], os.getcwd(), fout)
 				print('RESULT:\n')
-				print(open(localf,'r').read()) 
+				print(open(localf,'r').read())
+
+
+	def run(self, estimated_run_time=5):
+		print(f'{fG}[~] {fW}Running jobs on all {len(self.nodes.keys())} peers...')
+		threads = multiprocessing.Pool(10)
+		for peer, node in self.nodes.items():
+			if self.alive[peer] and not node.unemployed:
+				print(f'{fY}[+]{fG}{peer}{fW} has a job to run{OFF}')
+				# Check the task will work (files present, etc. )
+				if node.verify_task:
+					# Run the task
+						cmd_str = node.build_command()
+						print(f'{fB} Executing:\n{fW}{node.task["job"]}{fE}')
+						job = threads.apply_async(distributed.rmt_cmd, (node.nodestr, cmd_str))
+						try:
+							job.get(estimated_run_time)
+						except multiprocessing.TimeoutError:
+							print(f'[!] Timeout Waiting for reply from {peer}')
+							pass
+
 
 def get_test_results(peer, nodestr, fileout='result.txt'):
 	if not os.path.isdir(peer.upper()):
@@ -262,6 +308,13 @@ def main():
 		destroy_bakery(distributed.load_nodes(os.getcwd()))
 	else:
 		controller = Master({})
+		# controller.test_network()
+		if '--query-nodes' in sys.argv:
+			print(json.dumps(distributed.cmd_all_peers(controller.peers, ' '.join(sys.argv[2:])),indent=2))
+
+		if '--whos-running' in sys.argv:
+			print(json.dumps(controller.whos_running(sys.argv[-1]), indent=2))
+
 
 if __name__ == '__main__':
 	main()

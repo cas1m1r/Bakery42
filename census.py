@@ -63,9 +63,11 @@ def put_rmt_file(nodestr, localpath, remotepath):
 	return os.path.getsize(localpath)
 
 def get_rmt_file(nodestr, localpath, remotepath):
-	execute(f'sftp {nodestr}:{remotepath} <<< $"get {localpath}"', False)
-	return os.path.getsize(localpath)
-
+	remotefile = remotepath.split('/')[-1]
+	rpath = remotepath.split(remotefile)[0]
+	execute(f'sftp {nodestr}:{rpath}/ <<< $"get {remotefile}"', False)
+	os.system(f'mv {remotefile} {localpath}')
+	return os.path.getsize(os.path.join(localpath, remotefile))
 
 # TODO: hardcoding makes this one specific to the Titleist Project, but could be generalized
 def pull_rmt_log(name, nodestr, log):
@@ -132,7 +134,6 @@ def get_pid(nodestr, program):
 			pass
 	return list(set(pids))
 
-
 def pull_pid(nodestr, line):
 	isnext = False
 	pid = -1
@@ -151,7 +152,6 @@ def pause_pid(nodestr, program):
 		if pid>0:
 			cmd += f'{pid} '
 	rmt_cmd(nodestr, cmd)	
-	
 
 def resume_pid(nodestr, program):
 	pids = get_pid(nodestr, program)
@@ -160,7 +160,6 @@ def resume_pid(nodestr, program):
 		if pid>0:
 			cmd += f'{pid} '
 	rmt_cmd(nodestr, cmd)	
-
 
 def kill_pid(nodestr, program):
 	pids = get_pid(nodestr, program)
@@ -203,10 +202,8 @@ def synchronize_latest_watcher(nodes, watching):
 		# TODO: Starting watcher on one of the nodes
 	return latest_log_data
 
-
 def syncronize_peers():
 	nodes = load_nodes(os.getcwd())
-
 
 def node_census():
 	nodes = load_nodes(os.getcwd())
@@ -223,5 +220,45 @@ def node_census():
 			print(f'[+] {len(files_downloaded)} files downloaded from {name}')
 	return nodes, connections, watching, spotting
 
+def cmd_all_peers(peers, cmd,timeout=3):
+	results = {}
+	threads = multiprocessing.Pool(len(peers.keys()))
+	for peer, nodestr in peers.items():
+		command = threads.apply_async(rmt_cmd, (nodestr, cmd,))
+		try:
+			results[peer] = command.get(timeout)
+		except multiprocessing.TimeoutError:
+			print(f'[x] TimeoutError Waiting for {peer}...')
+			pass
+	return results
 
+def who_has_file(peers, filename):
+	results = {}
+	threads = multiprocessing.Pool(len(peers.keys()))
+	for peer, nodestr in peers.items():
+		command = threads.apply_async(rmt_file_exists, (nodestr, filename,))
+		try:
+			results[peer] = command.get(3)
+		except multiprocessing.TimeoutError:
+			print(f'[x] TimeoutError waiting for {peer}')
+			pass 
+	results
+
+def who_has_dir(peers, filename):
+	results = {}
+	threads = multiprocessing.Pool(len(peers.keys()))
+	for peer, nodestr in peers.items():
+		command = threads.apply_async(rmt_dir_exists, (nodestr, filename,))
+		try:
+			results[peer] = command.get(3)
+		except multiprocessing.TimeoutError:
+			print(f'[x] TimeoutError waiting for {peer}')
+			pass 
+	return results
+
+def rmt_mkdir(nodestr, newpath):
+	return rnt_cmd(nodedstr, f'mkdir {newpath}')
+
+def rmt_listdir(nodestr, filepath, wildcards=''):
+	return rmt_cmd(nodestr, f'ls {filepath}/{wildcards}')
 
