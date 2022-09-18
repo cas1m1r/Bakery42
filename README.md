@@ -1,5 +1,5 @@
 # Bakery42
-another attempt at creating my own kind of raspberry pi distributed computing
+another attempt at creating my own kind of raspberry pi distributed computing. Will be used for supporting data created using a different project  (![Titleist](https://github.com/cas1m1r/Titleist)).
 
 # Setup
 To setup nodes in the network create a `.env` file containing the IP addresses of all the nodes you want to use. For ex:
