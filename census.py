@@ -67,7 +67,7 @@ def get_rmt_file(nodestr, localpath, remotepath):
 	rpath = remotepath.split(remotefile)[0]
 	execute(f'sftp {nodestr}:{rpath}/ <<< $"get {remotefile}"', False)
 	os.system(f'mv {remotefile} {localpath}')
-	return os.path.getsize(os.path.join(localpath, remotefile))
+	# return os.path.getsize(localpath)
 
 # TODO: hardcoding makes this one specific to the Titleist Project, but could be generalized
 def pull_rmt_log(name, nodestr, log):

@@ -44,12 +44,15 @@ def explore_host(hosts, interesting):
 	threads = multiprocessing.Pool(25)
 	for domain in hosts[interesting]:
 		# checkout_link(interesting, domain)
-		event = threads.apply_async(checkout_link, (interesting, domain))
-		try:
-			event.get(5)
-		except multiprocessing.TimeoutError:
-			print(f'{fY}[!] TimeOut waiting for {fR}{interesting} to serve {domain}{OFF}')
-			pass
+		if not os.path.isfile(os.path.join(interesting,domain)):
+			event = threads.apply_async(checkout_link, (interesting, domain))
+			try:
+				event.get(5)
+			except multiprocessing.TimeoutError:
+				print(f'{fY}[!] TimeOut waiting for {fR}{interesting} to serve {domain}{OFF}')
+				pass
+		else:
+			print(f'{fW}[+]{fR} Already visited {fW} {domain}{OFF}')
 
 def main():
 	

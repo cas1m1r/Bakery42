@@ -282,13 +282,14 @@ def transfer_project_files(nodestr):
 def enable_all_nodes(nodes):
 	for node in nodes.keys():
 		nodestr = nodes[node]
+		os.system('rm *.txt')
 		transfer_project_files(nodestr)
 
 
 def kill_all_workers(peers):
 	threads = multiprocessing.Pool(len(peers.keys()))
 	for peer, nodestr in peers.items():
-		event = threads.apply_async(get_pid, (nodestr, 'analysis.py'))
+		event = threads.apply_async(distributed.get_pid, (nodestr, 'visitor.py'))
 		for pid in event.get(3):
 			distributed.kill_pid(nodestr, pid)
 			print(f'[X] Ended {nodestr}:{pid}')
@@ -298,16 +299,25 @@ def destroy_bakery(peers):
 	for peer, nodestr in peers.items():
 		event = threads.apply_async(utils.rmt_cmd, (nodestr, f'rm -rf {bakery_location(nodestr)}'))
 		event.get(120)
-			
+
+def local_cleaning():
+	for item in os.listdir(os.getcwd()):
+		if len(item.split('.')) >3:
+			for filename in os.listdir(item):
+				open(os.path.join(os.getcwd(),item,filename),'w').write('')
 
 def main():
 	if '--kill' in sys.argv:
 		kill_all_workers(distributed.load_nodes(os.getcwd()))
+		# for i in {4..10}; do  ps aux | grep visitor.py  | cut -d ' ' -f $i | while read n; do kill -9 $n; done; done
 
-	if '--clean' in sys.argv:
+	elif '--clean' in sys.argv:
 		destroy_bakery(distributed.load_nodes(os.getcwd()))
+	
+	elif '--clean-local' in sys.argv:
+		local_cleaning()
 
-	if '--build' in sys.argv:
+	elif '--build' in sys.argv:
 		enable_all_nodes(distributed.load_nodes(os.getcwd()))
 
 	else:

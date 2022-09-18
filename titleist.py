@@ -2,12 +2,18 @@ from colorama import init, Fore
 import census as distributed
 import bakeryutils as utils
 import multiprocessing
+import pandas as pd
 import numpy as np
 import random
 import json
 import sys
 import os
 from workforce import *
+
+
+
+top1m = pd.read_csv('top-1m.csv')
+TOP_DOMAINS = list(top1m[:]['DOMAIN'])[0:999]
 
 def pull_logs(controller):
 	parse_task = {}
@@ -32,6 +38,13 @@ def pull_logs(controller):
 			titlated[peer] = True
 		else:
 			titlated[peer] = False
+
+
+def local_cleaning():
+	for item in os.listdir(os.getcwd()):
+		if len(item.split('.')) >3:
+			for filename in os.path.listdir(item):
+				open(os.patah.join(os.getcwd(),item,filename),'w').write('')
 
 
 def distribute_hostnames(controller:Master, hosts:dict):
@@ -95,53 +108,63 @@ def distributed_viewers(logfile):
 		n += 1
 	return assignments
 
-def save_work(nx:Master, hosts:dict):
-	finished = {}
-	jobs = distribute_hostnames(nx, hosts)
-	# threads = multiprocessing.Pool(len(nx.peers.keys()))
-	for node in nx.nodes.values():
-		finished[node.nodename] = check_work(nx, jobs, node)	
-	return finished
 
-
-def check_work(nx:Master, jobs:dict, node:Node):
-	finished = {}
-	finished[node.nodename] = {}
-	# Check assignments for this node
-	threads = multiprocessing.Pool(3)
-	node_tasks = jobs[node]
-	print(f'[>] {node.nodename} is viewing pages from {len(node_tasks.keys())} differents hosts. Saving their Work...')
-	for ipaddr in node_tasks.keys():
-		domains = node_tasks[ipaddr]
-		domdir = os.path.join(os.getcwd(),node.nodename.upper(),ipaddr)
-		if not os.path.isdir(domdir):
-			os.mkdir(domdir)
-		finished[node.nodename][ipaddr] = []
-		for domain in domains:
-			rpath = f'/home/{node.hostname}/Bakery42/{ipaddr}/{domain.replace("*.","")}'
-			lpath = os.path.join(domdir, domain.replace("*.",""))
-			test = threads.apply_async(distributed.rmt_file_exists, (node.nodestr, rpath))
-			try:
-				if test.get(5):
-					print(f'\t[+] {node.nodename} finished viewing {domain} at {ipaddr}')
-					distributed.get_rmt_file(node.nodestr, lpath)
-					finished[node.nodename][ipaddr].append(domain)
-			except multiprocessing.TimeoutError:
-				print(f'[!] Error looking for {rpath} on {node.nodename}[{node.ip}]')
-				pass
-	return finished
+def save_work(nx):
+	# for each node list all logs 
+	# grab any dont already have 
+	print('saving work...')
+	lfiles= {}
+	threads = multiprocessing.Pool(64)
+	
+	NODES  = list(nx.nodes.keys())
+	random.shuffle(NODES)
+	for peer in NODES:
+		node = nx.nodes[peer]
+		ipaddrs = []
+		lfiles[peer] = os.listdir(os.path.join(os.getcwd(),peer.upper()))
+		for elmt in utils.rmt_cmd(node.nodestr, f'ls /home/{node.hostname}/Bakery42'):
+			if len(elmt.split('.')) > 3:
+				ip = os.path.join('/home',node.hostname,'Bakery42',elmt)
+				rfiles = utils.rmt_cmd(node.nodestr, f'ls {ip}')
+				N = len(rfiles)
+				ii = 0
+				random.shuffle(rfiles)
+				for domain in rfiles:
+					ii += 1
+					
+					if domain not in os.listdir(peer) and len(list(domain)) > 3:
+						rpath = os.path.join('/home',node.hostname,'Bakery42',elmt,domain)
+						lpath = os.path.join(os.getcwd(),peer.upper(),domain)
+						# distributed.get_rmt_file(node.nodestr,lpath, rpath)
+						ftransfer = threads.apply_async(distributed.get_rmt_file, (node.nodestr,lpath, rpath))
+						try:
+							bytes_transferred = ftransfer.get(2)
+							# print(f'{fR}[+]{fY} Downloaded {fB}{bytes_transferred}bytes [{domain}]{OFF}')
+							lfiles[peer].append(domain)
+						except multiprocessing.TimeoutError:
+							print(f'{fR}[X] Error Getting {fY}{domain}{fR} data{OFF}')
+							pass
+					else:
+						print(f'{fG}[-]{fW} Already have {fG}{domain}{fW} data skipping...{OFF}')
+						# empty_file = f'echo "" > {os.path.join(rpath)}'
+						# distributed.rmt_cmd(node.nodestr, empty_file)
+						os.system('rm *.txt')
 
 def consolidate_log(squatfile,verbose=True):
 	data = {}
-	results = json.loads(open(squatfile,'r').read())
-	for entry in results['entries']:
-		ip = entry['ip_address']
-		domain = entry['site_registered']
-		print(f'{fG}{domain}{fW} is hosted at {fC}{ip}{OFF}')
-		if ip not in list(data.keys()) and len(ip.split('.'))>3:
-			data[ip] = [domain]
-		elif len(ip.split('.'))>3:
-			data[ip].append(domain)
+	try:
+		results = json.loads(open(squatfile,'r').read())
+		for entry in results['entries']:
+			ip = entry['ip_address']
+			domain = entry['site_registered']
+			print(f'{fG}{domain}{fW} is hosted at {fC}{ip}{OFF}')
+			if ip not in list(data.keys()) and len(ip.split('.'))>3:
+				data[ip] = [domain]
+			elif len(ip.split('.'))>3:
+				data[ip].append(domain)
+	except json.decoder.JSONDecodeError:
+		print(f'[X] Unable to parse {squatfile}')
+		pass                           
 	return data
 
 
@@ -165,29 +188,114 @@ def combine_logs():
 	return domaindata
 
 
+
+def levenshtein(seq1, seq2):
+    size_x = len(seq1) + 1
+    size_y = len(seq2) + 1
+    matrix = np.zeros ((size_x, size_y))
+
+    # Trying to make this a bit faster
+    matrix[:,0] = list(range(size_x))
+    matrix[0,:] = list(range(size_y))
+
+    for x in range(1, size_x):
+        for y in range(1, size_y):
+            if seq1[x-1] == seq2[y-1]:
+                matrix [x,y] = min(
+                    matrix[x-1, y] + 1,
+                    matrix[x-1, y-1],
+                    matrix[x, y-1] + 1
+                )
+            else:
+                matrix [x,y] = min(
+                    matrix[x-1,y] + 1,
+                    matrix[x-1,y-1] + 1,
+                    matrix[x,y-1] + 1
+                )
+    return matrix[size_x - 1, size_y - 1]
+
+
+
+def spot_a_squat(domain):
+	victim = ''
+	squatting = False
+	for legit in TOP_DOMAINS:
+		if 3 >= levenshtein(domain, legit) > 0:
+			victim = legit
+			squatting = True
+			break
+	return squatting, victim
+
+
+def local_power_squat(logfile):
+	if not os.path.isfile(logfile):
+		print(f'[!] Cannot find {logfile}')
+		return False
+	squatters = []
+	log = json.loads(open(logfile,'r').read())
+	threads = multiprocessing.Pool(64)
+	print(f'[$] Checking for Bitsquatters in {logfile}')
+	hosters = list(log.keys())
+	random.shuffle(hosters)
+	n_processed = 0
+
+	for ipaddr in hosters:
+		print(f'\t->{fW}\033[1m Checking if {fG}{ipaddr} {fW}hosts any Bitsquatters...{fC}[{len(log[ipaddr])} domains]{OFF}')
+		for domain in log[ipaddr]:
+			if len(domain) < 42: # checked list and this would automatically disqualify top 1k domains
+				squat = threads.apply_async(spot_a_squat, (domain,))
+				try:
+					squatting, victim = squat.get(5)
+					n_processed += 1
+					if squatting:
+						print(f'\t\t{fR} {domain} {fW}[similar to {legit}?]{OFF}')
+						squatters.append(victim)
+				except:
+					print(f'{fR}[X] Error Processing:{fB}{domain}{OFF}')
+					pass
+			else:
+				print(f'{fY}[~]{fW} Skipping over {fC}{domain}{fW}{OFF}')
+			if n_processed > 1 and n_processed%100:
+				print(f'{fW}[#]{fG} {n_processed} domains have been examined.')
+	return squatters 
+
+
+def local_cleaning(nx):
+	for nodedir in nx.peers.keys():
+		for item in os.listdir(nodedir):
+			open(os.path.join(nodedir,item),'w').write('')
+
+
 def main():
+	if '--local-squat' in sys.argv:
+		open(f'possible_squats.json','w').write(json.dumps({'squatters':local_power_squat(sys.argv[-1])}))
+		exit()
+
 	nx = Master({})
-	if '--get-logs' in sys.argv:
-		pull_logs(nx)	
+	
 
 	if '--parse-log' in sys.argv:
 		print(f'Distributing Tasks...')
 		if log_exists():
 			distributed_viewers(sys.argv[-1])
 
-	if '--combine-logs' in sys.argv:
+	elif '--combine-logs' in sys.argv:
 		data_out = combine_logs()
 		if os.path.isfile('all_results_by_host.json'):
 			# Warn user this would overwrite existing
 			os.system('mv all_results_by_host.json older_results_by_hosts.json')
 		open('all_results_by_host.json','w').write(json.dumps(combine_logs(),indent=2))
 
+	elif '--get-logs' in sys.argv:
+		pull_logs(nx)	
 
-	if '--save-work' in sys.argv:
+	elif '--save-work' in sys.argv:
 		if log_exists():
 			hosts = json.loads(open(sys.argv[-1],'r').read())
-			save_work(nx, hosts)
+			save_work(nx)
 
+	elif '--clean-local' in sys.argv:
+		local_cleaning(nx)
 
 
 if __name__ == '__main__':

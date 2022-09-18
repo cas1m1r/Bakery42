@@ -1,7 +1,10 @@
+from bakeryutils import create_timestamp
 import multiprocessing
 import json
 import sys
 import os
+
+
 
 def parse_entry(line):
 	try:
@@ -22,7 +25,8 @@ if __name__ == '__main__':
 	if len(sys.argv) > 1:
 		logfile = sys.argv[-1]
 	else:
-		print('[X] No Log File Given!!')
+		ld, lt = create_timestamp()
+		print(f'squatters{"%02d" % int(ld.split("/")[0])}{ld.split("/")[1]}{ld.split("/")[-1][-2:]}.txt')
 		exit()
 	logdata = {'entries':[]}
 	threads = multiprocessing.Pool(10)
